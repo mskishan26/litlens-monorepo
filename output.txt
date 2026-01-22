@@ -1,0 +1,114 @@
+data: {"type": "source", "source": {"type": "url", "url": "papers/causal_inference_intro.pdf", "title": "Introduction to Causal Inference Methods"}}
+
+data: {"type": "source", "source": {"type": "url", "url": "papers/biostats_methods.pdf", "title": "Statistical Methods in Biomedical Research"}}
+
+data: {"type": "source", "source": {"type": "url", "url": "papers/propensity_scores.pdf", "title": "Propensity Score Methods: A Comprehensive Review"}}
+
+data: {"type": "text-delta", "textDelta": "The "}
+
+data: {"type": "text-delta", "textDelta": "study "}
+
+data: {"type": "text-delta", "textDelta": "population "}
+
+data: {"type": "text-delta", "textDelta": "was "}
+
+data: {"type": "text-delta", "textDelta": "selected "}
+
+data: {"type": "text-delta", "textDelta": "using "}
+
+data: {"type": "text-delta", "textDelta": "stratified "}
+
+data: {"type": "text-delta", "textDelta": "random "}
+
+data: {"type": "text-delta", "textDelta": "sampling. "}
+
+data: {"type": "text-delta", "textDelta": "The "}
+
+data: {"type": "text-delta", "textDelta": "findings "}
+
+data: {"type": "text-delta", "textDelta": "suggest "}
+
+data: {"type": "text-delta", "textDelta": "a "}
+
+data: {"type": "text-delta", "textDelta": "moderate "}
+
+data: {"type": "text-delta", "textDelta": "effect "}
+
+data: {"type": "text-delta", "textDelta": "size "}
+
+data: {"type": "text-delta", "textDelta": "with "}
+
+data: {"type": "text-delta", "textDelta": "implications "}
+
+data: {"type": "text-delta", "textDelta": "for "}
+
+data: {"type": "text-delta", "textDelta": "clinical "}
+
+data: {"type": "text-delta", "textDelta": "practice. "}
+
+data: {"type": "text-delta", "textDelta": "The "}
+
+data: {"type": "text-delta", "textDelta": "sample "}
+
+data: {"type": "text-delta", "textDelta": "size "}
+
+data: {"type": "text-delta", "textDelta": "provides "}
+
+data: {"type": "text-delta", "textDelta": "adequate "}
+
+data: {"type": "text-delta", "textDelta": "statistical "}
+
+data: {"type": "text-delta", "textDelta": "power "}
+
+data: {"type": "text-delta", "textDelta": "for "}
+
+data: {"type": "text-delta", "textDelta": "the "}
+
+data: {"type": "text-delta", "textDelta": "main "}
+
+data: {"type": "text-delta", "textDelta": "hypotheses. "}
+
+data: {"type": "text-delta", "textDelta": "The "}
+
+data: {"type": "text-delta", "textDelta": "results "}
+
+data: {"type": "text-delta", "textDelta": "are "}
+
+data: {"type": "text-delta", "textDelta": "consistent "}
+
+data: {"type": "text-delta", "textDelta": "with "}
+
+data: {"type": "text-delta", "textDelta": "theoretical "}
+
+data: {"type": "text-delta", "textDelta": "predictions "}
+
+data: {"type": "text-delta", "textDelta": "from "}
+
+data: {"type": "text-delta", "textDelta": "prior "}
+
+data: {"type": "text-delta", "textDelta": "work. "}
+
+data: {"type": "text-delta", "textDelta": "Causal "}
+
+data: {"type": "text-delta", "textDelta": "inference "}
+
+data: {"type": "text-delta", "textDelta": "methods "}
+
+data: {"type": "text-delta", "textDelta": "were "}
+
+data: {"type": "text-delta", "textDelta": "employed "}
+
+data: {"type": "text-delta", "textDelta": "to "}
+
+data: {"type": "text-delta", "textDelta": "address "}
+
+data: {"type": "text-delta", "textDelta": "confounding "}
+
+data: {"type": "text-delta", "textDelta": "variables."}
+
+data: {"type": "data", "name": "verification", "data": {"grounding_ratio": 0.29, "num_claims": 7, "num_grounded": 2, "unsupported_claims": ["The study used MSI to analyze the differential abundance of ions between treatment and control populations.", "The Histology Driven Data Mining study applied PLS-DA to analyze lipid differences.", "MSI data was processed to differentiate between preselected regions of interest.", "These examples show how multi-tissue MSI experiments can detect differentially abundant ions.", "Appropriate statistical methods and experimental design are important in MSI studies."]}}
+
+data: {"type": "data", "name": "completion", "data": {"message_id": "20260121224032299_8af33691", "chat_id": "chat1", "total_duration_ms": 2024.9713970000016}}
+
+data: [DONE]
+
