@@ -1,0 +1,23 @@
+import { openai } from "@ai-sdk/openai";
+import { streamText, convertToModelMessages, type UIMessage } from "ai";
+
+export async function POST(req: Request) {
+  const body = await req.json();
+  const { messages }: { messages: any[] } = body;
+  console.log("Received messages in route:", JSON.stringify(messages, null, 2));
+
+  // Fix for assistant-ui sending parts without content
+  const validMessages = messages.map(m => {
+    if (m.parts && !m.content) {
+      return { ...m, content: m.parts.map((p: any) => p.text || "").join("") };
+    }
+    return m;
+  });
+
+  const result = streamText({
+    model: openai.responses("gpt-4o-mini"),
+    messages: convertToModelMessages(validMessages),
+  });
+
+  return result.toUIMessageStreamResponse();
+}

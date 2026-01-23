@@ -609,17 +609,6 @@ class RAGServiceLite:
         # =================================================================
         # Chat History Endpoints (unchanged from full backend)
         # =================================================================
-
-        @web_app.get("/chats")
-        async def list_chats_legacy(
-            token: str = Depends(verify_token),
-            x_user_id: Optional[str] = Header(None),
-            x_user_anonymous: Optional[str] = Header(None),
-            limit: int = 20,
-        ):
-            """Legacy endpoint - redirects to /chats."""
-            return await list_chats(token, x_user_id, x_user_anonymous, limit)
-
         @web_app.get("/get_chats")
         async def list_chats(
             token: str = Depends(verify_token),

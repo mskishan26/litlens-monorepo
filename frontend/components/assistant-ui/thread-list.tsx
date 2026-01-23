@@ -1,5 +1,9 @@
+"use client";
+
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/lib/auth-context";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AssistantIf,
   ThreadListItemMorePrimitive,
@@ -8,17 +12,96 @@ import {
 } from "@assistant-ui/react";
 import { ArchiveIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import type { FC } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+type ChatSummary = {
+  ChatId: string;
+  title?: string;
+  updated_at?: string;
+  last_message_date?: string;
+};
 
 export const ThreadList: FC = () => {
+  const { user } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const chatId = searchParams.get("chatId");
+
+  const loadChats = useCallback(async () => {
+    if (!user?.uid) {
+      setChats([]);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/chats", {
+        headers: {
+          "x-user-id": user.uid,
+          "x-user-anonymous": "false",
+        },
+      });
+      if (!response.ok) {
+        setChats([]);
+        return;
+      }
+      const data = (await response.json()) as { chats?: ChatSummary[] };
+      setChats(data.chats ?? []);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.uid]);
+
+  useEffect(() => {
+    void loadChats();
+  }, [loadChats]);
+
+  const handleSelectChat = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("chatId", id);
+      router.push(`${pathname}?${params.toString()}`);
+    },
+    [pathname, router, searchParams],
+  );
+
+  const chatItems = useMemo(
+    () =>
+      chats.map((chat) => ({
+        id: chat.ChatId,
+        title: chat.title?.trim() ? chat.title : "Title not found",
+        updatedAt: chat.updated_at ?? chat.last_message_date,
+      })),
+    [chats],
+  );
+
   return (
     <ThreadListPrimitive.Root className="aui-root aui-thread-list-root flex flex-col gap-1">
       <ThreadListNew />
-      <AssistantIf condition={({ threads }) => threads.isLoading}>
-        <ThreadListSkeleton />
-      </AssistantIf>
-      <AssistantIf condition={({ threads }) => !threads.isLoading}>
-        <ThreadListPrimitive.Items components={{ ThreadListItem }} />
-      </AssistantIf>
+      {isLoading ? <ThreadListSkeleton /> : null}
+      {chatItems.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          {chatItems.map((chat) => (
+            <button
+              key={chat.id}
+              type="button"
+              className={`aui-thread-list-item group flex h-9 items-center gap-2 rounded-lg px-3 text-start text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none ${
+                chatId === chat.id ? "bg-muted" : ""
+              }`}
+              onClick={() => handleSelectChat(chat.id)}
+            >
+              <span className="truncate">{chat.title}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <AssistantIf condition={({ threads }) => threads.isLoading}>
+          <ThreadListSkeleton />
+        </AssistantIf>
+      )}
     </ThreadListPrimitive.Root>
   );
 };

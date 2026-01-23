@@ -5,6 +5,7 @@ import {
   useChatRuntime,
   AssistantChatTransport,
 } from "@assistant-ui/react-ai-sdk";
+import { generateId } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
 import {
   SidebarInset,
@@ -21,12 +22,76 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
+import { useAuth } from "@/lib/auth-context";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef } from "react";
 
 export const Assistant = () => {
+  const { user } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawChatId = searchParams.get("chatId");
+  const urlChatId =
+    rawChatId && rawChatId !== "undefined" && rawChatId !== "null"
+      ? rawChatId
+      : null;
+  const chatIdsRef = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    if (urlChatId) {
+      chatIdsRef.current.set("default", urlChatId);
+      chatIdsRef.current.set(urlChatId, urlChatId);
+    }
+  }, [urlChatId]);
+  const transport = useMemo(
+    () =>
+      new AssistantChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: async (options) => {
+          const threadId = options.id ?? "default";
+          const existingChatId = chatIdsRef.current.get(threadId);
+          const chatId = existingChatId ?? urlChatId ?? generateId();
+
+          if (!existingChatId) {
+            chatIdsRef.current.set(threadId, chatId);
+          }
+
+          if (!urlChatId || urlChatId !== chatId) {
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("chatId", chatId);
+            router.replace(`${pathname}?${params.toString()}`);
+          }
+
+          options.body = {
+            ...(options.body ?? {}),
+            chatId,
+            conversation_id: chatId,
+          };
+
+          return {
+            api: options.api,
+            headers: {
+              ...(options.headers ?? {}),
+              ...(user?.uid ? { "x-user-id": user.uid } : {}),
+              "x-user-anonymous": user?.uid ? "false" : "true",
+            },
+            credentials: options.credentials,
+            body: {
+              ...(options.body ?? {}),
+              id: options.id,
+              messages: options.messages,
+              trigger: options.trigger,
+              messageId: options.messageId,
+              metadata: options.requestMetadata,
+            },
+          };
+        },
+      }),
+    [pathname, router, searchParams, urlChatId, user?.uid],
+  );
   const runtime = useChatRuntime({
-    transport: new AssistantChatTransport({
-      api: "/api/chat",
-    }),
+    transport,
   });
 
   return (

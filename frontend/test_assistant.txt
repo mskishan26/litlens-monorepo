@@ -1,0 +1,121 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { AssistantRuntimeProvider, useThreadRuntime } from "@assistant-ui/react";
+import {
+  useChatRuntime,
+  AssistantChatTransport,
+} from "@assistant-ui/react-ai-sdk";
+import { Thread } from "@/components/assistant-ui/thread";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
+import { Separator } from "@/components/ui/separator";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+
+// Simulates fetching initial messages from an external source
+async function fetchInitialMessages() {
+  // In a real app, this could be an API call like:
+  // const response = await fetch('/api/initial-messages');
+  // return response.json();
+
+  // For now, return static messages
+  return [
+    {
+      id: "initial-user-1",
+      role: "user" as const,
+      content: "What's the weather in San Francisco?",
+      parts: [{ type: "text", text: "What's the weather in San Francisco?" }],
+      createdAt: new Date(),
+    },
+    {
+      id: "initial-assistant-1",
+      role: "assistant" as const,
+      content: "I can't provide real-time information like the current weather. However, you can check a reliable weather website or app for the most up-to-date forecast for San Francisco. If you need historical weather information or general climate trends for the area, feel free to ask!",
+      parts: [{ type: "text", text: "I can't provide real-time information like the current weather. However, you can check a reliable weather website or app for the most up-to-date forecast for San Francisco. If you need historical weather information or general climate trends for the area, feel free to ask!" }],
+      createdAt: new Date(),
+    },
+  ];
+}
+
+// Component that initializes the thread with fetched messages
+
+
+export const Assistant = () => {
+  const [messages, setMessages] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    fetchInitialMessages().then((msgs) => {
+      setMessages(msgs);
+    });
+  }, []);
+
+  if (!messages) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center bg-background text-muted-foreground">
+        Loading conversation...
+      </div>
+    );
+  }
+
+  return <AssistantContent initialMessages={messages} />;
+};
+
+const AssistantContent = ({ initialMessages }: { initialMessages: any[] }) => {
+  const [messages, setMessages] = useState(initialMessages);
+
+  const runtime = useChatRuntime({
+    transport: new AssistantChatTransport({
+      api: "/api/chat",
+    }),
+    messages,
+    // @ts-ignore
+    onMessagesChange: setMessages,
+  });
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <SidebarProvider>
+        <div className="flex h-dvh w-full pr-0.5">
+          <ThreadListSidebar />
+          <SidebarInset>
+            <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
+              <SidebarTrigger />
+              <Separator orientation="vertical" className="mr-2 h-4" />
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem className="hidden md:block">
+                    <BreadcrumbLink
+                      href="https://www.assistant-ui.com/docs/getting-started"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Build Your Own ChatGPT UX
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator className="hidden md:block" />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>Starter Template</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </BreadcrumbList>
+              </Breadcrumb>
+            </header>
+            <div className="flex-1 overflow-hidden">
+              <Thread />
+            </div>
+          </SidebarInset>
+        </div>
+      </SidebarProvider>
+    </AssistantRuntimeProvider>
+  );
+};
