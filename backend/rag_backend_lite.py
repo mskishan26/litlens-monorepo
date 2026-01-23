@@ -320,7 +320,7 @@ class RAGServiceLite:
             if not user_messages:
                 raise HTTPException(status_code=400, detail="No user message provided")
             query = user_messages[-1].get("content", "")
-            
+
             # Generate IDs
             completion_id = f"chatcmpl-{service._generate_id()}"
             message_id = service._generate_id()

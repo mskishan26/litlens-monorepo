@@ -6,6 +6,35 @@ export async function POST(req: Request) {
   const userId = req.headers.get("x-user-id");
   const userAnonymous = req.headers.get("x-user-anonymous");
 
+  // Extract the user query from messages and ensure proper format
+  let messages = body.messages || [];
+  
+  // Find the last user message and ensure it has the correct structure
+  const userMessages = messages.filter((msg: any) => msg.role === "user");
+  if (userMessages.length === 0) {
+    console.error("No user message found in request:", { body });
+    return new Response(
+      JSON.stringify({ error: "No user message provided" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Ensure the user message has content field
+  const lastUserMessage = userMessages[userMessages.length - 1];
+  if (!lastUserMessage.content && lastUserMessage.parts) {
+    // Extract content from parts if needed (assistant-ui format)
+    const textPart = lastUserMessage.parts.find((part: any) => part.type === "text");
+    if (textPart) {
+      lastUserMessage.content = textPart.text;
+    }
+  }
+
+  console.log("Sending to backend:", {
+    messages,
+    conversation_id: body.conversation_id || body.chatId,
+    lastUserMessage: lastUserMessage.content
+  });
+
   const response = await fetch(`${BACKEND_URL}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -16,6 +45,7 @@ export async function POST(req: Request) {
     },
     body: JSON.stringify({
       ...body,
+      messages,
       stream: true,
     }),
   });
