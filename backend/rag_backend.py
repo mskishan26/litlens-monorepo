@@ -318,10 +318,6 @@ class RAGService:
                     try:
                         yield text_start()
                         async for event in service.pipeline.answer_stream(**kwargs):
-                            # DEBUG LOG: See exactly what the pipeline yields
-                            if event.get("type") not in ["token"]:
-                                print(f"[DEBUG] Pipeline Event: {event.get('type')}")
-
                             if event.get("type") == "token":
                                 yield text_delta(event.get("content", ""))
                             
@@ -338,7 +334,6 @@ class RAGService:
                                     yield source_part(url, title)
                                 
                             elif event.get("type") == "hallucination":
-                                print("[DEBUG] Yielding Hallucination Chunk")
                                 yield data_part(
                                     "verification",
                                     {
@@ -351,7 +346,6 @@ class RAGService:
                                 )
                             
                             elif event.get("type") == "done":
-                                print("[DEBUG] Yielding Done Chunk")
                                 yield data_part(
                                     "completion",
                                     {
@@ -361,7 +355,6 @@ class RAGService:
                                     },
                                 )
                         
-                        print("--- END STREAM ---")
                         yield text_end()
                         yield "data: [DONE]\n\n"
                     

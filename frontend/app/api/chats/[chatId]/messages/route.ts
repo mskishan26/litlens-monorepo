@@ -23,14 +23,7 @@ export async function GET(
   const bodyText = await response.text();
 
   try {
-    const parsed = JSON.parse(bodyText);
-    // Debug log for visibility when loading existing chat messages
-    console.debug("[chat-messages] loaded", {
-      chatId,
-      status: response.status,
-      count: Array.isArray(parsed?.messages) ? parsed.messages.length : 0,
-      messages: parsed?.messages,
-    });
+    JSON.parse(bodyText);
   } catch (err) {
     console.warn("[chat-messages] failed to parse response", {
       chatId,

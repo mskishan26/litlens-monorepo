@@ -29,12 +29,6 @@ export async function POST(req: Request) {
     }
   }
 
-  console.log("Sending to backend:", {
-    messages,
-    conversation_id: body.conversation_id || body.chatId,
-    lastUserMessage: lastUserMessage.content
-  });
-
   const response = await fetch(`${BACKEND_URL}/v1/chat/completions`, {
     method: "POST",
     headers: {

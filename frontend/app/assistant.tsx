@@ -39,19 +39,26 @@ export const Assistant = () => {
   const chatIdsRef = useRef(new Map<string, string>());
   const [initialMessages, setInitialMessages] = useState<any[] | null>(null);
 
-  useEffect(() => {
-    if (urlChatId) {
-      chatIdsRef.current.set("default", urlChatId);
-      chatIdsRef.current.set(urlChatId, urlChatId);
-    }
-  }, [urlChatId]);
+
 
   useEffect(() => {
+    let isActive = true;
+
     const loadMessages = async () => {
+      // If we are switching to a chat we just created in this session, don't clear the messages
+      // This prevents the "disappearing message" issue
+      const isOptimisticChat =
+        urlChatId &&
+        (chatIdsRef.current.get(urlChatId) === urlChatId ||
+          Array.from(chatIdsRef.current.values()).includes(urlChatId));
+
       if (!urlChatId) {
-        setInitialMessages([]);
+        if (isActive) setInitialMessages([]);
         return;
       }
+
+      // Only clear messages if it's not a chat we just created locally
+      if (isActive && !isOptimisticChat) setInitialMessages(null);
 
       try {
         const res = await fetch(`/api/chats/${urlChatId}/messages`, {
@@ -60,6 +67,8 @@ export const Assistant = () => {
             "x-user-anonymous": user?.uid ? "false" : "true",
           },
         });
+
+        if (!isActive) return;
 
         if (!res.ok) {
           console.warn("Failed to load messages", {
@@ -80,8 +89,9 @@ export const Assistant = () => {
             [key: string]: any;
           }>;
         };
-        console.log("data-kishan")
-        console.log(data)
+
+        if (!isActive) return;
+
         const hydrated = (data.messages ?? []).flatMap((m) => {
           const ts = m.timestamp ? new Date(m.timestamp) : new Date();
           const items: any[] = [];
@@ -106,14 +116,6 @@ export const Assistant = () => {
             typeof rawAssistantText === "string"
               ? rawAssistantText
               : rawAssistantText?.text ?? rawAssistantText?.content ?? "";
-
-          console.debug("Hydration fields", {
-            messageId: m.MessageId,
-            query: m.query,
-            answer: m.answer,
-            userText,
-            assistantText,
-          });
 
           if (String(userText).trim()) {
             items.push({
@@ -145,33 +147,22 @@ export const Assistant = () => {
           return items;
         });
 
-        console.debug("Loaded chat messages", {
-          chatId: urlChatId,
-          count: hydrated.length,
-          messages: hydrated,
-        });
-
-        console.log(
-          "Loaded chat messages (assistant-ui format)",
-          JSON.stringify(
-            hydrated.map((msg) => ({
-              ...msg,
-              createdAt: msg.createdAt?.toISOString?.() ?? msg.createdAt,
-            })),
-            null,
-            2,
-          ),
-        );
-        console.log("Hydrated-kishan")
-        console.log(hydrated)
-        setInitialMessages(hydrated);
+        if (isActive) {
+          setInitialMessages(hydrated);
+        }
       } catch (error) {
-        console.error("Error loading messages", { chatId: urlChatId, error });
-        setInitialMessages([]);
+        if (isActive) {
+          console.error("Error loading messages", { chatId: urlChatId, error });
+          setInitialMessages([]);
+        }
       }
     };
 
     void loadMessages();
+
+    return () => {
+      isActive = false;
+    };
   }, [urlChatId, user?.uid]);
 
   if (urlChatId && initialMessages === null) {
@@ -187,7 +178,6 @@ export const Assistant = () => {
       initialMessages={initialMessages ?? []}
       urlChatId={urlChatId}
       chatIdsRef={chatIdsRef}
-      key={urlChatId ?? "new"}
     />
   );
 };
