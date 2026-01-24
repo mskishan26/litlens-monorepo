@@ -204,7 +204,8 @@ export const Assistant = () => {
 
   return (
     <AssistantContent
-      initialMessages={initialMessages ?? []}
+      key={urlChatId ?? "new"}
+      initialMessages={urlChatId && initialMessages ? initialMessages : []}
       urlChatId={urlChatId}
       chatIdsRef={chatIdsRef}
     />

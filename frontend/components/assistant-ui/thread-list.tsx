@@ -88,9 +88,8 @@ export const ThreadList: FC = () => {
             <button
               key={chat.id}
               type="button"
-              className={`aui-thread-list-item group flex h-9 items-center gap-2 rounded-lg px-3 text-start text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none ${
-                chatId === chat.id ? "bg-muted" : ""
-              }`}
+              className={`aui-thread-list-item group flex h-9 items-center gap-2 rounded-lg px-3 text-start text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none ${chatId === chat.id ? "bg-muted" : ""
+                }`}
               onClick={() => handleSelectChat(chat.id)}
             >
               <span className="truncate">{chat.title}</span>
@@ -107,16 +106,18 @@ export const ThreadList: FC = () => {
 };
 
 const ThreadListNew: FC = () => {
+  const router = useRouter();
+  const pathname = usePathname();
+
   return (
-    <ThreadListPrimitive.New asChild>
-      <Button
-        variant="outline"
-        className="aui-thread-list-new h-9 justify-start gap-2 rounded-lg px-3 text-sm hover:bg-muted data-active:bg-muted"
-      >
-        <PlusIcon className="size-4" />
-        New Thread
-      </Button>
-    </ThreadListPrimitive.New>
+    <Button
+      variant="outline"
+      className="aui-thread-list-new h-9 justify-start gap-2 rounded-lg px-3 text-sm hover:bg-muted data-active:bg-muted"
+      onClick={() => router.push(pathname)}
+    >
+      <PlusIcon className="size-4" />
+      New Thread
+    </Button>
   );
 };
 
