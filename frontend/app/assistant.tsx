@@ -23,6 +23,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { useAuth } from "@/lib/auth-context";
+import { setMessageExtras, clearMessageExtras } from "@/lib/message-extras-store";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -128,12 +129,40 @@ export const Assistant = () => {
           }
 
           if (String(assistantText).trim()) {
+            const assistantMsgId = `${m.MessageId}-assistant`;
+
+            // Store sources and verification in the extras store (read by AssistantMessageExtras)
+            const extras: Record<string, any> = {};
+
+            if (Array.isArray(m.sources) && m.sources.length > 0) {
+              extras.sources = m.sources.map((source: any) => ({
+                title: source.title ?? source.file_path ?? "Source",
+                url: source.file_path,
+                score: source.score,
+                chunk_id: source.chunk_id,
+              }));
+            }
+
+            if (m.hallucination) {
+              extras.verification = {
+                grounding_ratio: m.hallucination.grounding_ratio,
+                num_claims: m.hallucination.num_claims,
+                num_grounded: m.hallucination.num_grounded,
+                unsupported_claims: m.hallucination.unsupported_claims,
+              };
+            }
+
+            if (extras.sources || extras.verification) {
+              setMessageExtras(assistantMsgId, extras);
+            }
+
             items.push({
-              id: `${m.MessageId}-assistant`,
+              id: assistantMsgId,
               role: "assistant" as const,
               content: assistantText,
               parts: [{ type: "text", text: assistantText }],
               createdAt: ts,
+              status: { type: "complete" },
             });
           }
 

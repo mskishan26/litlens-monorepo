@@ -12,6 +12,7 @@ import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { getMessageExtras } from "@/lib/message-extras-store";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -77,10 +78,12 @@ const AssistantMessageExtras: FC = () => {
 
   const parts = message.parts as unknown as ReadonlyArray<Record<string, any>>;
 
-  const sources = parts.filter(
+  // Get sources from parts (streaming responses)
+  const sourcesFromParts = parts.filter(
     (part) => part.type === "source" || part.type === "source-url",
   );
 
+  // Get verification from parts (streaming responses)
   const verificationPart = parts.find((part) => {
     if (part.type === "data" && "name" in part) {
       return part.name === "verification";
@@ -88,11 +91,14 @@ const AssistantMessageExtras: FC = () => {
     return part.type === "data-verification";
   }) as { type: string; data?: any } | undefined;
 
-  if (status !== "complete" || (sources.length === 0 && !verificationPart)) {
-    return null;
-  }
+  // Get extras from store (past chat messages)
+  const storedExtras = getMessageExtras(message.id);
+  const sourcesFromStore = storedExtras?.sources ?? [];
+  const verificationFromStore = storedExtras?.verification;
 
-  const verification = verificationPart?.data as
+  // Combine: prefer streaming parts, fall back to stored extras
+  const sources: Array<Record<string, any>> = sourcesFromParts.length > 0 ? sourcesFromParts : sourcesFromStore;
+  const verification = (verificationPart?.data ?? verificationFromStore) as
     | {
         grounding_ratio?: number;
         num_claims?: number;
@@ -100,6 +106,10 @@ const AssistantMessageExtras: FC = () => {
         unsupported_claims?: string[];
       }
     | undefined;
+
+  if (status !== "complete" || (sources.length === 0 && !verification)) {
+    return null;
+  }
 
   return (
     <div className="mt-4 space-y-4 text-sm">
