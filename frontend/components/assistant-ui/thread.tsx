@@ -35,9 +35,14 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
+  SendIcon,
   SquareIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
 } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 export const Thread: FC = () => {
   return (
@@ -69,6 +74,157 @@ export const Thread: FC = () => {
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+  );
+};
+
+const AssistantMessageFeedback: FC = () => {
+  const message = useAssistantState(({ message }) => message);
+  const { user } = useAuth();
+  const searchParams = useSearchParams();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [submittedRating, setSubmittedRating] = useState<"positive" | "negative" | null>(null);
+
+  const chatId = searchParams.get("chatId");
+  const parts = message.parts as unknown as ReadonlyArray<Record<string, any>>;
+  const completionPart = parts.find((part) => {
+    if (part.type === "data" && "name" in part) {
+      return part.name === "completion";
+    }
+    return part.type === "data-completion";
+  }) as { type: string; data?: any } | undefined;
+  const rawMessageId = completionPart?.data?.message_id ?? message.id;
+  const messageId = rawMessageId.replace(/-assistant$/, "");
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClick = (event: MouseEvent) => {
+      if (!panelRef.current) return;
+      if (panelRef.current.contains(event.target as Node)) return;
+      setIsOpen(false);
+    };
+
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [isOpen]);
+
+  if (!chatId) return null;
+
+  const submitFeedback = async (rating: "positive" | "negative", comment?: string) => {
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(user?.uid ? { "x-user-id": user.uid } : {}),
+          "x-user-anonymous": user?.uid ? "false" : "true",
+        },
+        body: JSON.stringify({
+          chatId,
+          messageId,
+          rating,
+          comment: comment?.trim() ? comment.trim() : undefined,
+        }),
+      });
+    } catch {
+      // Silently fail for feedback
+    }
+  };
+
+  const handleRatingClick = async (rating: "positive" | "negative") => {
+    if (submittedRating === rating) {
+      // Already submitted this rating, just toggle panel
+      setIsOpen((prev) => !prev);
+      return;
+    }
+    setSubmittedRating(rating);
+    setIsOpen(true);
+    await submitFeedback(rating);
+  };
+
+  return (
+    <div className="aui-feedback-root relative flex gap-1 text-muted-foreground" ref={panelRef}>
+      <TooltipIconButton
+        tooltip={submittedRating === "positive" ? "Add comment" : "Thumbs up"}
+        onClick={() => handleRatingClick("positive")}
+        className={submittedRating === "positive" ? "text-foreground" : undefined}
+      >
+        <ThumbsUpIcon className={submittedRating === "positive" ? "fill-current" : undefined} />
+      </TooltipIconButton>
+      <TooltipIconButton
+        tooltip={submittedRating === "negative" ? "Add comment" : "Thumbs down"}
+        onClick={() => handleRatingClick("negative")}
+        className={submittedRating === "negative" ? "text-foreground" : undefined}
+      >
+        <ThumbsDownIcon className={submittedRating === "negative" ? "fill-current" : undefined} />
+      </TooltipIconButton>
+      {isOpen && submittedRating ? (
+        <AssistantMessageFeedbackPanel
+          chatId={chatId}
+          messageId={messageId}
+          userId={user?.uid}
+          rating={submittedRating}
+          onClose={() => setIsOpen(false)}
+          onSubmit={(comment) => submitFeedback(submittedRating, comment)}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+const AssistantMessageFeedbackPanel: FC<{
+  chatId: string;
+  messageId: string;
+  userId?: string;
+  rating: "positive" | "negative";
+  onClose: () => void;
+  onSubmit: (comment: string) => Promise<void>;
+}> = ({ onClose, onSubmit }) => {
+  const [comment, setComment] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!comment.trim()) {
+      onClose();
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await onSubmit(comment);
+      setIsSubmitted(true);
+      setTimeout(onClose, 800);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="aui-feedback-panel absolute left-0 top-9 z-50 w-64 rounded-lg border bg-background p-2 shadow-lg">
+      <textarea
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
+        placeholder="Add a comment..."
+        rows={3}
+        className="w-full resize-none rounded-md border border-input bg-background p-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        autoFocus
+      />
+      <div className="mt-2 flex items-center justify-between">
+        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={handleSubmit}
+          disabled={isSubmitting || isSubmitted}
+        >
+          {isSubmitted ? "Thanks!" : "Send"}
+          <SendIcon className="ml-2 size-3" />
+        </Button>
+      </div>
+    </div>
   );
 };
 
@@ -338,9 +494,10 @@ const AssistantMessage: FC = () => {
         <MessageError />
       </div>
 
-      <div className="aui-assistant-message-footer mt-1 ml-2 flex">
+      <div className="aui-assistant-message-footer mt-1 ml-2 flex flex-wrap items-center gap-2">
         <BranchPicker />
         <AssistantActionBar />
+        <AssistantMessageFeedback />
       </div>
     </MessagePrimitive.Root>
   );
@@ -350,9 +507,7 @@ const AssistantActionBar: FC = () => {
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
-      autohide="not-last"
-      autohideFloat="single-branch"
-      className="aui-assistant-action-bar-root col-start-3 row-start-2 -ml-1 flex gap-1 text-muted-foreground data-floating:absolute data-floating:rounded-md data-floating:border data-floating:bg-background data-floating:p-1 data-floating:shadow-sm"
+      className="aui-assistant-action-bar-root col-start-3 row-start-2 -ml-1 flex gap-1 text-muted-foreground"
     >
       <ActionBarPrimitive.Copy asChild>
         <TooltipIconButton tooltip="Copy">

@@ -111,6 +111,11 @@ class GenerateTitleRequest(BaseModel):
     queries: list[str]  # Frontend provides the queries it already has
 
 
+class RenameChatRequest(BaseModel):
+    """Request body for renaming a chat."""
+    title: str
+
+
 # =============================================================================
 # RAG Service
 # =============================================================================
@@ -621,6 +626,87 @@ class RAGService:
                 "title": title,
                 "generated": True,
             }
+
+        @web_app.patch("/chats/{chat_id}")
+        async def rename_chat(
+            chat_id: str,
+            request: RenameChatRequest,
+            token: str = Depends(verify_token),
+            x_user_id: Optional[str] = Header(None),
+            x_user_anonymous: Optional[str] = Header(None),
+        ):
+            """Rename a chat by updating metadata title."""
+            if not service.persistence:
+                raise HTTPException(status_code=501, detail="Persistence not configured")
+
+            user_id = x_user_id or "anonymous"
+            is_anonymous = parse_anonymous_header(x_user_anonymous)
+
+            if is_anonymous or user_id == "anonymous":
+                raise HTTPException(status_code=403, detail="Sign in to rename chats")
+
+            is_owner, actual_owner = await service.persistence.verify_chat_ownership(
+                chat_id, user_id
+            )
+
+            if actual_owner is None:
+                raise HTTPException(status_code=404, detail="Chat not found")
+
+            if not is_owner:
+                raise HTTPException(status_code=403, detail="Access denied")
+
+            title = request.title.strip()
+            if not title:
+                raise HTTPException(status_code=400, detail="Title cannot be empty")
+
+            success = await service.persistence.update_chat_title(
+                user_id=user_id,
+                chat_id=chat_id,
+                title=title,
+            )
+
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to update chat title")
+
+            return {"chat_id": chat_id, "title": title, "renamed": True}
+
+        @web_app.delete("/chats/{chat_id}")
+        async def hide_chat(
+            chat_id: str,
+            token: str = Depends(verify_token),
+            x_user_id: Optional[str] = Header(None),
+            x_user_anonymous: Optional[str] = Header(None),
+        ):
+            """Soft-delete a chat (hide from the user's sidebar)."""
+            if not service.persistence:
+                raise HTTPException(status_code=501, detail="Persistence not configured")
+
+            user_id = x_user_id or "anonymous"
+            is_anonymous = parse_anonymous_header(x_user_anonymous)
+
+            if is_anonymous or user_id == "anonymous":
+                raise HTTPException(status_code=403, detail="Sign in to delete chats")
+
+            is_owner, actual_owner = await service.persistence.verify_chat_ownership(
+                chat_id, user_id
+            )
+
+            if actual_owner is None:
+                raise HTTPException(status_code=404, detail="Chat not found")
+
+            if not is_owner:
+                raise HTTPException(status_code=403, detail="Access denied")
+
+            success = await service.persistence.hide_chat(
+                user_id=user_id,
+                chat_id=chat_id,
+                is_hidden=True,
+            )
+
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to delete chat")
+
+            return {"chat_id": chat_id, "hidden": True}
 
         # =================================================================
         # Admin/Debug Endpoints (optional, remove in production)

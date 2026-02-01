@@ -60,7 +60,7 @@ from decimal import Decimal
 
 try:
     import boto3
-    from boto3.dynamodb.conditions import Key
+    from boto3.dynamodb.conditions import Key, Attr
 except ImportError:
     boto3 = None
 
@@ -537,6 +537,85 @@ class DynamoPersistence:
         
         return {"message_id": trace.message_id}
 
+    async def update_message_feedback(
+        self,
+        chat_id: str,
+        message_id: str,
+        rating: str,
+        comment: Optional[str] = None,
+        user_id: Optional[str] = None,
+        is_anonymous: bool = False,
+    ) -> bool:
+        """
+        Update feedback fields for a message in the chat-table.
+
+        Stores structured feedback data without altering rendered output.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        update_expression = (
+            "SET feedback_rating = :rating, feedback_updated_at = :ts, "
+            "feedback_is_anonymous = :is_anon"
+        )
+        expression_values = {
+            ":rating": rating,
+            ":ts": timestamp,
+            ":is_anon": is_anonymous,
+        }
+
+        if comment is not None:
+            update_expression += ", feedback_comment = :comment"
+            expression_values[":comment"] = comment
+
+        if user_id is not None:
+            update_expression += ", feedback_user_id = :user_id"
+            expression_values[":user_id"] = user_id
+
+        loop = asyncio.get_event_loop()
+
+        def update() -> bool:
+            try:
+                self.chat_table.update_item(
+                    Key={"ChatId": chat_id, "MessageId": message_id},
+                    UpdateExpression=update_expression,
+                    ExpressionAttributeValues=expression_values,
+                    ConditionExpression="attribute_exists(ChatId)",
+                )
+                return True
+            except self._dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                return False
+
+        return await loop.run_in_executor(None, update)
+
+    async def hide_chat(
+        self,
+        user_id: str,
+        chat_id: str,
+        is_hidden: bool = True,
+    ) -> bool:
+        """
+        Soft hide a chat from the user's sidebar.
+
+        Returns True if successful, False if chat doesn't exist or user doesn't own it.
+        """
+        loop = asyncio.get_event_loop()
+
+        def update():
+            try:
+                self.metadata_table.update_item(
+                    Key={"UserId": user_id, "ChatId": chat_id},
+                    UpdateExpression="SET is_hidden = :hidden, updated_at = :ts",
+                    ConditionExpression="attribute_exists(UserId)",
+                    ExpressionAttributeValues={
+                        ":hidden": is_hidden,
+                        ":ts": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                return True
+            except self._dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                return False
+
+        return await loop.run_in_executor(None, update)
+
     async def _save_message(
         self,
         trace: TraceBuilder,
@@ -633,13 +712,15 @@ class DynamoPersistence:
                     "SET #title = if_not_exists(#title, :title), "
                     "last_message_date = :ts, "
                     "updated_at = :ts, "
-                    "is_anonymous = :is_anon"
+                    "is_anonymous = :is_anon, "
+                    "is_hidden = if_not_exists(is_hidden, :is_hidden)"
                 ),
                 ExpressionAttributeNames={"#title": "title"},
                 ExpressionAttributeValues={
                     ":title": chat_title,
                     ":ts": timestamp,
                     ":is_anon": trace.is_anonymous,
+                    ":is_hidden": False,
                 },
             )
         
@@ -698,6 +779,7 @@ class DynamoPersistence:
             response = self.metadata_table.query(
                 IndexName="LastUsedIndex",
                 KeyConditionExpression=Key("UserId").eq(user_id),
+                FilterExpression=Attr("is_hidden").ne(True),
                 ScanIndexForward=False,  # Newest first
                 Limit=limit,
             )

@@ -242,10 +242,67 @@ const AssistantContent = ({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState(initialMessages);
+  const [chatTitle, setChatTitle] = useState<string>("New chat");
 
   useEffect(() => {
     setMessages(initialMessages);
   }, [initialMessages]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadChatTitle = async () => {
+      if (!urlChatId) {
+        if (isActive) setChatTitle("New chat");
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/chats", {
+          headers: {
+            ...(user?.uid ? { "x-user-id": user.uid } : {}),
+            "x-user-anonymous": user?.uid ? "false" : "true",
+          },
+        });
+
+        if (!isActive) return;
+
+        if (!response.ok) {
+          setChatTitle("Chat");
+          return;
+        }
+
+        const data = (await response.json()) as {
+          chats?: Array<{ ChatId: string; title?: string }>;
+        };
+        const matching = data.chats?.find((chat) => chat.ChatId === urlChatId);
+        const title = matching?.title?.trim();
+        setChatTitle(title ? title : "Chat");
+      } catch (error) {
+        if (isActive) {
+          console.warn("Failed to load chat title", { chatId: urlChatId, error });
+          setChatTitle("Chat");
+        }
+      }
+    };
+
+    void loadChatTitle();
+
+    const handleTitleUpdated = (event: Event) => {
+      if (!urlChatId) return;
+      const detail = (event as CustomEvent<{ chatId: string; title: string }>).detail;
+      if (detail?.chatId === urlChatId) {
+        setChatTitle(detail.title?.trim() ? detail.title : "Chat");
+      }
+    };
+
+    window.addEventListener("chat-title-updated", handleTitleUpdated);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener("chat-title-updated", handleTitleUpdated);
+    };
+  }, [urlChatId, user?.uid]);
 
   const transport = useMemo(
     () =>
@@ -311,18 +368,8 @@ const AssistantContent = ({
               <Separator orientation="vertical" className="mr-2 h-4" />
               <Breadcrumb>
                 <BreadcrumbList>
-                  <BreadcrumbItem className="hidden md:block">
-                    <BreadcrumbLink
-                      href="https://www.assistant-ui.com/docs/getting-started"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Build Your Own ChatGPT UX
-                    </BreadcrumbLink>
-                  </BreadcrumbItem>
-                  <BreadcrumbSeparator className="hidden md:block" />
                   <BreadcrumbItem>
-                    <BreadcrumbPage>Starter Template</BreadcrumbPage>
+                    <BreadcrumbPage>{chatTitle}</BreadcrumbPage>
                   </BreadcrumbItem>
                 </BreadcrumbList>
               </Breadcrumb>
