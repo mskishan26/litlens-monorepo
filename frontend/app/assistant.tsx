@@ -38,7 +38,23 @@ export const Assistant = () => {
       ? rawChatId
       : null;
   const chatIdsRef = useRef(new Map<string, string>());
+  const prevChatIdRef = useRef<string | null>(null);
+  const [chatSessionKey, setChatSessionKey] = useState(0);
   const [initialMessages, setInitialMessages] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    if (!urlChatId) {
+      chatIdsRef.current.clear();
+      clearMessageExtras();
+    }
+  }, [urlChatId]);
+
+  useEffect(() => {
+    if (!urlChatId && prevChatIdRef.current !== null) {
+      setChatSessionKey((key) => key + 1);
+    }
+    prevChatIdRef.current = urlChatId;
+  }, [urlChatId]);
 
 
 
@@ -204,7 +220,7 @@ export const Assistant = () => {
 
   return (
     <AssistantContent
-      key={urlChatId ?? "new"}
+      key={`session-${chatSessionKey}`}
       initialMessages={urlChatId && initialMessages ? initialMessages : []}
       urlChatId={urlChatId}
       chatIdsRef={chatIdsRef}

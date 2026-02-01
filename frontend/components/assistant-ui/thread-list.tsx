@@ -49,6 +49,7 @@ export const ThreadList: FC = () => {
         return;
       }
       const data = (await response.json()) as { chats?: ChatSummary[] };
+      // console.log("Loaded chats:", data.chats?.length ?? 0);
       setChats(data.chats ?? []);
     } finally {
       setIsLoading(false);

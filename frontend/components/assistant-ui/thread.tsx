@@ -37,7 +37,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import type { FC } from "react";
+import { type FC, useState } from "react";
 
 export const Thread: FC = () => {
   return (
@@ -75,6 +75,7 @@ export const Thread: FC = () => {
 const AssistantMessageExtras: FC = () => {
   const message = useAssistantState(({ message }) => message);
   const status = message.status?.type;
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const parts = message.parts as unknown as ReadonlyArray<Record<string, any>>;
 
@@ -112,43 +113,66 @@ const AssistantMessageExtras: FC = () => {
   }
 
   return (
-    <div className="mt-4 space-y-4 text-sm">
-      {sources.length > 0 && (
-        <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
-          <div className="mb-2 font-semibold text-foreground">Sources</div>
-          <ul className="space-y-1 text-muted-foreground">
-            {sources.map((source, index) => {
-              const title =
-                source.title ??
-                source.source?.title ??
-                source.url ??
-                source.source?.url ??
-                "Source";
-              return (
-                <li key={`${title}-${index}`}>
-                  <span>{title}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
+    <div className="mt-4 text-sm">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="flex items-center gap-2 px-2 text-muted-foreground"
+        onClick={() => setIsExpanded((prev) => !prev)}
+      >
+        {isExpanded ? (
+          <>
+            <ArrowUpIcon className="size-4" />
+            Hide details
+          </>
+        ) : (
+          <>
+            <ArrowDownIcon className="size-4" />
+            More
+          </>
+        )}
+      </Button>
 
-      {verification && (
-        <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
-          <div className="mb-2 font-semibold text-foreground">Verification</div>
-          <div className="grid gap-1 text-muted-foreground">
-            <div>Grounding ratio: {verification.grounding_ratio ?? "-"}</div>
-            <div>Claims: {verification.num_claims ?? "-"}</div>
-            <div>Grounded: {verification.num_grounded ?? "-"}</div>
-          </div>
-          {verification.unsupported_claims?.length ? (
-            <ul className="mt-3 list-disc space-y-1 pl-5 text-muted-foreground">
-              {verification.unsupported_claims.map((claim, index) => (
-                <li key={`${claim}-${index}`}>{claim}</li>
-              ))}
-            </ul>
-          ) : null}
+      {isExpanded && (
+        <div className="mt-3 space-y-4">
+          {sources.length > 0 && (
+            <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
+              <div className="mb-2 font-semibold text-foreground">Sources</div>
+              <ul className="space-y-1 text-muted-foreground">
+                {sources.map((source, index) => {
+                  const title =
+                    source.title ??
+                    source.source?.title ??
+                    source.url ??
+                    source.source?.url ??
+                    "Source";
+                  return (
+                    <li key={`${title}-${index}`}>
+                      <span>{title}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {verification && (
+            <div className="rounded-xl border border-border/60 bg-muted/40 p-3">
+              <div className="mb-2 font-semibold text-foreground">Verification</div>
+              <div className="grid gap-1 text-muted-foreground">
+                <div>Grounding ratio: {verification.grounding_ratio ?? "-"}</div>
+                <div>Claims: {verification.num_claims ?? "-"}</div>
+                <div>Grounded: {verification.num_grounded ?? "-"}</div>
+              </div>
+              {verification.unsupported_claims?.length ? (
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-muted-foreground">
+                  {verification.unsupported_claims.map((claim, index) => (
+                    <li key={`${claim}-${index}`}>{claim}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          )}
         </div>
       )}
     </div>
