@@ -74,10 +74,6 @@ image = (
         "HF_HOME": "/models",
         "PYTHONPATH": MODAL_REMOTE_CODE_DIR,
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        "SERVICE_AUTH_TOKEN": "dev-secret-123",  # Override in Modal Secrets
-        "USE_DYNAMODB": "true",
-        "AWS_REGION": "us-east-2",
-        "AWS_ROLE_ARN": "arn:aws:iam::649489225731:role/modal-litlens-role",
     })
     .add_local_dir(
         LOCAL_CODE_DIR,
@@ -138,7 +134,7 @@ class FeedbackRequest(BaseModel):
     timeout=600,
     min_containers=0,
     max_containers=1,
-    # secrets=[modal.Secret.from_name("litlens-config")],
+    secrets=[modal.Secret.from_name("litlens-config")],
 )
 @modal.concurrent(max_inputs=10)
 class RAGService:
