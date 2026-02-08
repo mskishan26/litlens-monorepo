@@ -12,7 +12,7 @@ import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getMessageExtras } from "@/lib/message-extras-store";
+import { getMessageExtras, setMessageExtras } from "@/lib/message-extras-store";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -36,6 +36,7 @@ import {
   PencilIcon,
   RefreshCwIcon,
   SendIcon,
+  ShieldCheckIcon,
   SquareIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
@@ -44,7 +45,10 @@ import { type FC, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
-export const Thread: FC = () => {
+export const Thread: FC<{
+  enableHallucinationCheck: boolean;
+  onToggleHallucinationCheck: () => void;
+}> = ({ enableHallucinationCheck, onToggleHallucinationCheck }) => {
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background"
@@ -70,7 +74,10 @@ export const Thread: FC = () => {
 
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-4 overflow-visible rounded-t-3xl bg-background pb-4 md:pb-6">
           <ThreadScrollToBottom />
-          <Composer />
+          <Composer
+            enableHallucinationCheck={enableHallucinationCheck}
+            onToggleHallucinationCheck={onToggleHallucinationCheck}
+          />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -86,6 +93,7 @@ const AssistantMessageFeedback: FC = () => {
   const [submittedRating, setSubmittedRating] = useState<"positive" | "negative" | null>(null);
 
   const chatId = searchParams.get("chatId");
+  const status = message.status?.type;
   const parts = message.parts as unknown as ReadonlyArray<Record<string, any>>;
   const completionPart = parts.find((part) => {
     if (part.type === "data" && "name" in part) {
@@ -109,7 +117,8 @@ const AssistantMessageFeedback: FC = () => {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [isOpen]);
 
-  if (!chatId) return null;
+  // Hide feedback buttons while message is generating (same as action bar)
+  if (!chatId || status !== "complete") return null;
 
   const submitFeedback = async (rating: "positive" | "negative", comment?: string) => {
     try {
@@ -248,7 +257,35 @@ const AssistantMessageExtras: FC = () => {
     return part.type === "data-verification";
   }) as { type: string; data?: any } | undefined;
 
-  // Get extras from store (past chat messages)
+  // Store extras when they arrive during streaming so they persist after completion
+  useEffect(() => {
+    if (sourcesFromParts.length === 0 && !verificationPart) return;
+
+    const extras: Record<string, any> = {};
+
+    if (sourcesFromParts.length > 0) {
+      extras.sources = sourcesFromParts.map((source) => ({
+        title: source.title ?? source.source?.title ?? source.url ?? "Source",
+        url: source.url ?? source.source?.url,
+        score: source.score ?? source.source?.score,
+      }));
+    }
+
+    if (verificationPart?.data) {
+      extras.verification = {
+        grounding_ratio: verificationPart.data.grounding_ratio,
+        num_claims: verificationPart.data.num_claims,
+        num_grounded: verificationPart.data.num_grounded,
+        unsupported_claims: verificationPart.data.unsupported_claims,
+      };
+    }
+
+    if (extras.sources || extras.verification) {
+      setMessageExtras(message.id, extras);
+    }
+  }, [message.id, sourcesFromParts, verificationPart]);
+
+  // Get extras from store (past chat messages or stored during streaming)
   const storedExtras = getMessageExtras(message.id);
   const sourcesFromStore = storedExtras?.sources ?? [];
   const verificationFromStore = storedExtras?.verification;
@@ -409,7 +446,10 @@ const ThreadSuggestions: FC = () => {
   );
 };
 
-const Composer: FC = () => {
+const Composer: FC<{
+  enableHallucinationCheck: boolean;
+  onToggleHallucinationCheck: () => void;
+}> = ({ enableHallucinationCheck, onToggleHallucinationCheck }) => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone className="aui-composer-attachment-dropzone flex w-full flex-col rounded-2xl border border-input bg-background px-1 pt-2 outline-none transition-shadow has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/20 data-[dragging=true]:border-ring data-[dragging=true]:border-dashed data-[dragging=true]:bg-accent/50">
@@ -421,16 +461,44 @@ const Composer: FC = () => {
           autoFocus
           aria-label="Message input"
         />
-        <ComposerAction />
+        <ComposerAction
+          enableHallucinationCheck={enableHallucinationCheck}
+          onToggleHallucinationCheck={onToggleHallucinationCheck}
+        />
       </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
   );
 };
 
-const ComposerAction: FC = () => {
+const ComposerAction: FC<{
+  enableHallucinationCheck: boolean;
+  onToggleHallucinationCheck: () => void;
+}> = ({ enableHallucinationCheck, onToggleHallucinationCheck }) => {
   return (
     <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
-      <ComposerAddAttachment />
+      <div className="flex items-center gap-2">
+        <ComposerAddAttachment />
+        <TooltipIconButton
+          tooltip={`Hallucination check: ${
+            enableHallucinationCheck ? "On" : "Off"
+          }`}
+          side="bottom"
+          variant="ghost"
+          size="icon"
+          type="button"
+          aria-pressed={enableHallucinationCheck}
+          aria-label="Toggle hallucination check"
+          onClick={onToggleHallucinationCheck}
+          className={cn(
+            "size-8.5 rounded-full p-1",
+            enableHallucinationCheck
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <ShieldCheckIcon className="size-5" />
+        </TooltipIconButton>
+      </div>
 
       <AssistantIf condition={({ thread }) => !thread.isRunning}>
         <ComposerPrimitive.Send asChild>

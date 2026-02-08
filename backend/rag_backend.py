@@ -116,6 +116,13 @@ class RenameChatRequest(BaseModel):
     title: str
 
 
+class FeedbackRequest(BaseModel):
+    chat_id: str
+    message_id: str
+    rating: str
+    comment: Optional[str] = None
+
+
 # =============================================================================
 # RAG Service
 # =============================================================================
@@ -160,15 +167,22 @@ class RAGService:
             print(f"  Region: {aws_region}")
             
             try:
-                from dynamo_persistence import DynamoPersistence
+                from dynamo_persistence import DynamoPersistence, TraceBuilder, _generate_id
                 self.persistence = DynamoPersistence.from_oidc(
                     role_arn=aws_role_arn,
                     region=aws_region,
                 )
+                self._generate_id = _generate_id
+                self._TraceBuilder = TraceBuilder
                 print("✓ DynamoDB initialized")
             except Exception as e:
                 print(f"ERROR: DynamoDB init failed: {e}")
                 self.persistence = None
+                self._TraceBuilder = None
+                # Fallback ID generator
+                import uuid
+                from datetime import datetime
+                self._generate_id = lambda: f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[:-3]}_{uuid.uuid4().hex[:8]}"
         else:
             if use_dynamodb:
                 print("WARNING: USE_DYNAMODB=true but AWS_ROLE_ARN not set")
@@ -242,7 +256,8 @@ class RAGService:
         async def health():
             return {
                 "status": "healthy",
-                "pipeline_ready": service.pipeline is not None,
+                "mode": "lite",
+                "pipeline_ready": True,  # Always ready in mock mode
                 "persistence": "dynamodb" if service.persistence else "none",
                 "queue_depth": service.pipeline.generation_queue_depth if service.pipeline else 0,
             }
@@ -430,7 +445,7 @@ class RAGService:
         # Chat History Endpoints
         # =================================================================
 
-        @web_app.get("/get_chat")
+        @web_app.get("/get_chats")
         async def list_chats(
             token: str = Depends(verify_token),
             x_user_id: Optional[str] = Header(None),
@@ -709,7 +724,52 @@ class RAGService:
             return {"chat_id": chat_id, "hidden": True}
 
         # =================================================================
-        # Admin/Debug Endpoints (optional, remove in production)
+        # Feedback Endpoint
+        # =================================================================
+
+        @web_app.post("/feedback")
+        async def submit_feedback(
+            request: FeedbackRequest,
+            token: str = Depends(verify_token),
+            x_user_id: Optional[str] = Header(None),
+            x_user_anonymous: Optional[str] = Header(None),
+        ):
+            """Store feedback for a specific assistant message."""
+            if not service.persistence:
+                raise HTTPException(status_code=501, detail="Persistence not configured")
+
+            user_id = x_user_id or "anonymous"
+            is_anonymous = parse_anonymous_header(x_user_anonymous)
+
+            is_owner, actual_owner = await service.persistence.verify_chat_ownership(
+                request.chat_id, user_id
+            )
+            print("chat id:", request.chat_id)
+            print("user id:", user_id)
+            print("message id:", request.message_id)
+            if actual_owner is not None and not is_owner:
+                raise HTTPException(status_code=403, detail="Access denied")
+
+            rating = request.rating.strip().lower()
+            if rating not in {"positive", "negative"}:
+                raise HTTPException(status_code=400, detail="Invalid rating")
+
+            success = await service.persistence.update_message_feedback(
+                chat_id=request.chat_id,
+                message_id=request.message_id,
+                rating=rating,
+                comment=request.comment,
+                user_id=None if is_anonymous else user_id,
+                is_anonymous=is_anonymous,
+            )
+
+            if not success:
+                raise HTTPException(status_code=404, detail="Message not found")
+
+            return {"ok": True}
+
+        # =================================================================
+        # Admin/Debug Endpoints
         # =================================================================
 
         @web_app.get("/admin/abandoned-traces")

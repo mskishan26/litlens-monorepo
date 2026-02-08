@@ -61,12 +61,23 @@ export const ThreadList: FC = () => {
         return;
       }
       const data = (await response.json()) as { chats?: ChatSummary[] };
-      // console.log("Loaded chats:", data.chats?.length ?? 0);
       setChats(data.chats ?? []);
+
+      // Dispatch title for the currently selected chat (if any)
+      if (chatId) {
+        const matching = data.chats?.find((chat) => chat.ChatId === chatId);
+        if (matching) {
+          window.dispatchEvent(
+            new CustomEvent("chat-title-loaded", {
+              detail: { chatId, title: matching.title?.trim() || "Chat" },
+            }),
+          );
+        }
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [user?.uid]);
+  }, [user?.uid, chatId]);
 
   useEffect(() => {
     void loadChats();
@@ -74,11 +85,21 @@ export const ThreadList: FC = () => {
 
   const handleSelectChat = useCallback(
     (id: string) => {
+      // Dispatch title immediately so header updates without waiting for API
+      const chat = chats.find((c) => c.ChatId === id);
+      if (chat) {
+        window.dispatchEvent(
+          new CustomEvent("chat-title-loaded", {
+            detail: { chatId: id, title: chat.title?.trim() || "Chat" },
+          }),
+        );
+      }
+
       const params = new URLSearchParams(searchParams.toString());
       params.set("chatId", id);
       router.push(`${pathname}?${params.toString()}`);
     },
-    [pathname, router, searchParams],
+    [chats, pathname, router, searchParams],
   );
 
   const handleRenameChat = useCallback(

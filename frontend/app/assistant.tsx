@@ -242,6 +242,7 @@ const AssistantContent = ({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState(initialMessages);
+  const [enableHallucinationCheck, setEnableHallucinationCheck] = useState(true);
   const [chatTitle, setChatTitle] = useState<string>("New chat");
 
   useEffect(() => {
@@ -249,60 +250,29 @@ const AssistantContent = ({
   }, [initialMessages]);
 
   useEffect(() => {
-    let isActive = true;
-
-    const loadChatTitle = async () => {
-      if (!urlChatId) {
-        if (isActive) setChatTitle("New chat");
-        return;
-      }
-
-      try {
-        const response = await fetch("/api/chats", {
-          headers: {
-            ...(user?.uid ? { "x-user-id": user.uid } : {}),
-            "x-user-anonymous": user?.uid ? "false" : "true",
-          },
-        });
-
-        if (!isActive) return;
-
-        if (!response.ok) {
-          setChatTitle("Chat");
-          return;
-        }
-
-        const data = (await response.json()) as {
-          chats?: Array<{ ChatId: string; title?: string }>;
-        };
-        const matching = data.chats?.find((chat) => chat.ChatId === urlChatId);
-        const title = matching?.title?.trim();
-        setChatTitle(title ? title : "Chat");
-      } catch (error) {
-        if (isActive) {
-          console.warn("Failed to load chat title", { chatId: urlChatId, error });
-          setChatTitle("Chat");
-        }
-      }
-    };
-
-    void loadChatTitle();
+    // Reset title when switching chats - actual title comes from chat-title-loaded event
+    if (!urlChatId) {
+      setChatTitle("New chat");
+    } else {
+      setChatTitle("Chat"); // Placeholder until ThreadList provides the title
+    }
 
     const handleTitleUpdated = (event: Event) => {
-      if (!urlChatId) return;
       const detail = (event as CustomEvent<{ chatId: string; title: string }>).detail;
       if (detail?.chatId === urlChatId) {
         setChatTitle(detail.title?.trim() ? detail.title : "Chat");
       }
     };
 
+    // Listen for title updates (from rename) and initial load (from ThreadList)
     window.addEventListener("chat-title-updated", handleTitleUpdated);
+    window.addEventListener("chat-title-loaded", handleTitleUpdated);
 
     return () => {
-      isActive = false;
       window.removeEventListener("chat-title-updated", handleTitleUpdated);
+      window.removeEventListener("chat-title-loaded", handleTitleUpdated);
     };
-  }, [urlChatId, user?.uid]);
+  }, [urlChatId]);
 
   const transport = useMemo(
     () =>
@@ -344,11 +314,12 @@ const AssistantContent = ({
               trigger: options.trigger,
               messageId: options.messageId,
               metadata: options.requestMetadata,
+              enable_hallucination_check: enableHallucinationCheck,
             },
           };
         },
       }),
-    [pathname, router, searchParams, urlChatId, user?.uid],
+    [pathname, router, searchParams, urlChatId, user?.uid, enableHallucinationCheck],
   );
   const runtime = useChatRuntime({
     transport,
@@ -375,7 +346,12 @@ const AssistantContent = ({
               </Breadcrumb>
             </header>
             <div className="flex-1 overflow-hidden">
-              <Thread />
+              <Thread
+                enableHallucinationCheck={enableHallucinationCheck}
+                onToggleHallucinationCheck={() =>
+                  setEnableHallucinationCheck((prev) => !prev)
+                }
+              />
             </div>
           </SidebarInset>
         </div>

@@ -1,33 +1,22 @@
 """
-RAG Backend Lite - Modal CPU-only Mock Service
-===============================================
+RAG Backend - Modal GPU Service with DynamoDB
+==============================================
 
-Lightweight version of the RAG backend that:
-- Runs on CPU only (no GPU, no L4)
-- Keeps DynamoDB persistence fully functional
-- Mocks the /v1/chat/completions endpoint with streaming responses
-- Uses OpenAI-compatible API format (identical to full backend)
-- Parses markdown response format with sources and hallucination check
+Clean FastAPI backend with:
+- Single persistence initialization
+- Proper trace fetching with user ownership verification
+- X-User-Anonymous header for business logic decisions
+- Save-at-start pattern for abandoned request visibility
+- Single message_id (serves as both message and trace identifier)
+- Chat title generation endpoint
 
-Use case: 
-- Development and testing without GPU costs
-- Testing DynamoDB persistence and chat management
-- Frontend integration testing
-
-Streaming Event Lifecycle:
-1. sources    - delta.sources: list of paper titles
-2. token(s)   - delta.content: streamed answer tokens
-3. hallucination - delta.hallucination: grounding metrics
-4. done       - finish_reason: "stop" with usage and message_id
-5. [DONE]     - end of stream
-
-Endpoints (identical contract to full backend):
-- POST /v1/chat/completions - OpenAI-compatible chat completions (mock)
+Endpoints:
+- POST /query - Process RAG query (streaming or non-streaming)
 - GET /health - Health check
-- GET /chats - List user's chats
+- GET /chats - List user's chats (requires non-anonymous user)
 - GET /chats/{chat_id}/messages - Get chat history
 - GET /chats/{chat_id}/messages/{message_id}/trace - Get trace for a message
-- POST /chats/{chat_id}/generate-title - Generate a mock title
+- POST /chats/{chat_id}/generate-title - Generate a title for the chat
 """
 
 import modal
@@ -39,9 +28,6 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 import os
-import asyncio
-import random
-import time
 
 # =============================================================================
 # Configuration
@@ -49,30 +35,45 @@ import time
 
 LOCAL_CODE_DIR = "."
 MODAL_REMOTE_CODE_DIR = "/root/app"
+MODEL_VOLUME_NAME = "model-weights-vol"
+DATA_VOLUME_NAME = "data-storage-vol"
 
-# No GPU, longer idle timeout since it's cheap
-CONTAINER_IDLE_TIMEOUT = 1800  # 30 minutes
+GPU_TYPE = "L4"
+CONTAINER_IDLE_TIMEOUT = 900
 
 # Security
 API_KEY_NAME = "X-Service-Token"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-VERCEL_STREAM_HEADER = "x-vercel-ai-ui-message-stream"
+
+
+def download_nltk():
+    import nltk
+    nltk.download("punkt_tab")
 
 
 # =============================================================================
-# Modal Image (CPU-only, minimal dependencies)
+# Modal Image
 # =============================================================================
 
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
+    modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu24.04", add_python="3.12")
+    .uv_pip_install("vllm", extra_options="--torch-backend=cu128")
+    .uv_pip_install(
+        "sentence-transformers==5.2.0",
+        "chromadb==1.4.0",
+        "nltk==3.9.2",
+        "rank-bm25",
+        "accelerate",
         "fastapi",
         "pydantic>=2.0",
         "boto3",
     )
+    .run_function(download_nltk)
     .env({
-        "ENV": "dev",
+        "ENV": "prod",
+        "HF_HOME": "/models",
         "PYTHONPATH": MODAL_REMOTE_CODE_DIR,
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         "SERVICE_AUTH_TOKEN": "dev-secret-123",  # Override in Modal Secrets
         "USE_DYNAMODB": "true",
         "AWS_REGION": "us-east-2",
@@ -83,9 +84,7 @@ image = (
         remote_path=MODAL_REMOTE_CODE_DIR,
         ignore=[".git/", "__pycache__/", ".ipynb_checkpoints/",
                 "litlens_inference/", ".files/", ".chainlit/",
-                "logs/", "traces/", "*.pyc", "aws/",
-                # Ignore GPU-heavy modules
-                "inference/", "models/"],
+                "logs/", "traces/", "*.pyc","aws/"],
     )
 )
 
@@ -93,10 +92,11 @@ image = (
 # Modal App
 # =============================================================================
 
-app = modal.App("rag-backend-lite")
+app = modal.App("rag-backend-service")
+model_vol = modal.Volume.from_name(MODEL_VOLUME_NAME)
+data_vol = modal.Volume.from_name(DATA_VOLUME_NAME)
 
-
-# OpenAI-compatible request model (matches full backend)
+# NEED TO CHANGE THE DEFAULT CONV idn and hallucination check
 class ChatCompletionRequest(BaseModel):
     model: str = "litlens-rag"
     messages: list[dict]  # [{"role": "user", "content": "..."}]
@@ -108,7 +108,7 @@ class ChatCompletionRequest(BaseModel):
 
 class GenerateTitleRequest(BaseModel):
     """Request body for title generation."""
-    queries: list[str]
+    queries: list[str]  # Frontend provides the queries it already has
 
 
 class RenameChatRequest(BaseModel):
@@ -116,114 +116,38 @@ class RenameChatRequest(BaseModel):
     title: str
 
 
-class FeedbackRequest(BaseModel):
-    chat_id: str
-    message_id: str
-    rating: str
-    comment: Optional[str] = None
-
-
 # =============================================================================
-# Mock Data Generators
-# =============================================================================
-
-MOCK_SOURCES_FULL = [
-    {
-        "text": "The fundamental principles of causal inference require careful consideration of confounding variables and selection bias.",
-        "metadata": {
-            "paper_title": "Introduction to Causal Inference Methods",
-            "file_path": "papers/causal_inference_intro.pdf",
-            "chroma_id": "chunk_mock_001",
-        },
-        "score": 0.92,
-    },
-    {
-        "text": "Regression analysis provides a flexible framework for modeling relationships between dependent and independent variables.",
-        "metadata": {
-            "paper_title": "Statistical Methods in Biomedical Research",
-            "file_path": "papers/biostats_methods.pdf",
-            "chroma_id": "chunk_mock_002",
-        },
-        "score": 0.87,
-    },
-    {
-        "text": "The propensity score methodology offers a powerful approach to addressing confounding in observational studies.",
-        "metadata": {
-            "paper_title": "Propensity Score Methods: A Comprehensive Review",
-            "file_path": "papers/propensity_scores.pdf",
-            "chroma_id": "chunk_mock_003",
-        },
-        "score": 0.84,
-    },
-]
-
-LOREM_SENTENCES = [
-    "The analysis reveals significant correlations between the variables under study.",
-    "Previous research has established foundational frameworks for understanding this phenomenon.",
-    "Statistical methods employed include regression analysis and hypothesis testing.",
-    "The findings suggest a moderate effect size with implications for clinical practice.",
-    "Further investigation is warranted to validate these preliminary observations.",
-    "The methodology adheres to established protocols in the field of biostatistics.",
-    "Cross-validation techniques were applied to ensure model robustness.",
-    "The confidence intervals indicate reasonable precision in the estimates.",
-    "Longitudinal data analysis reveals temporal patterns of interest.",
-    "The study population was selected using stratified random sampling.",
-    "Causal inference methods were employed to address confounding variables.",
-    "The results are consistent with theoretical predictions from prior work.",
-    "Sensitivity analyses confirm the stability of the primary findings.",
-    "The sample size provides adequate statistical power for the main hypotheses.",
-    "Subgroup analyses reveal heterogeneous effects across demographic categories.",
-]
-
-
-def generate_mock_answer(query: str, num_sentences: int = 5) -> str:
-    """Generate a mock answer based on the query."""
-    random.seed(len(query))
-    selected = random.sample(LOREM_SENTENCES, min(num_sentences, len(LOREM_SENTENCES)))
-    random.seed()
-    return " ".join(selected)
-
-
-def generate_mock_title(queries: list[str]) -> str:
-    """Generate a mock title from queries."""
-    if not queries:
-        return "New Chat"
-    
-    first_query = queries[0]
-    words = first_query.split()[:6]
-    
-    if len(words) >= 3:
-        return " ".join(words[:5]).title()
-    return first_query[:50]
-
-
-# =============================================================================
-# RAG Lite Service
+# RAG Service
 # =============================================================================
 
 @app.cls(
     image=image,
-    # No GPU!
+    gpu=GPU_TYPE,
+    volumes={
+        "/models": model_vol,
+        "/data": data_vol,
+    },
     scaledown_window=CONTAINER_IDLE_TIMEOUT,
-    timeout=300,
+    timeout=600,
     min_containers=0,
-    max_containers=2,
+    max_containers=1,
     # secrets=[modal.Secret.from_name("litlens-config")],
 )
-@modal.concurrent(max_inputs=20)  # Higher concurrency since no GPU bottleneck
-class RAGServiceLite:
-    """Modal class hosting mock RAG pipeline + FastAPI (CPU only)."""
+@modal.concurrent(max_inputs=10)
+class RAGService:
+    """Modal class hosting RAG pipeline + FastAPI."""
     
+    pipeline = None
     persistence = None
-    _generate_id = None
 
     @modal.enter()
     async def startup(self):
-        """Initialize persistence only (no ML models)."""
+        """Initialize pipeline and persistence."""
         import sys
         sys.path.insert(0, MODAL_REMOTE_CODE_DIR)
         
-        print("🚀 Starting RAG Backend Lite (CPU-only mock service)")
+        from utils.logger import configure_logging
+        configure_logging({"logging": {"environment": "production", "level": "INFO"}})
         
         # Initialize persistence
         use_dynamodb = os.environ.get("USE_DYNAMODB", "false").lower() == "true"
@@ -256,23 +180,38 @@ class RAGServiceLite:
             if use_dynamodb:
                 print("WARNING: USE_DYNAMODB=true but AWS_ROLE_ARN not set")
             print("Running without persistence")
-            # Fallback ID generator
-            import uuid
-            from datetime import datetime
-            self._generate_id = lambda: f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[:-3]}_{uuid.uuid4().hex[:8]}"
-            self._TraceBuilder = None
+            
+        # Message ID generation
+        from dynamo_persistence import _generate_id
+        self._generate_id = _generate_id
         
-        print("✓ RAG Backend Lite ready (mock mode)")
+        # Initialize pipeline
+        from chat_pipeline import RAGPipelineV2
+        
+        config_path = os.path.join(MODAL_REMOTE_CODE_DIR, "config.yaml")
+        if not os.path.exists(config_path):
+            config_path = None
+        
+        self.pipeline = RAGPipelineV2(
+            config_path=config_path,
+            use_dynamodb=self.persistence is not None,
+            dynamodb_persistence=self.persistence,
+        )
+        
+        await self.pipeline.initialize()
+        print("✓ Pipeline ready")
+
+    @modal.exit()
+    async def shutdown(self):
+        if self.pipeline:
+            await self.pipeline.cleanup()
+            print("Pipeline cleaned up")
 
     @modal.asgi_app()
     def web_app(self):
         """FastAPI application."""
         
-        web_app = FastAPI(
-            title="RAG Backend Lite API",
-            version="2.1.0-lite",
-            description="CPU-only mock service for development and testing",
-        )
+        web_app = FastAPI(title="RAG Backend API", version="2.1.0")
         
         web_app.add_middleware(
             CORSMiddleware,
@@ -292,7 +231,12 @@ class RAGServiceLite:
             return api_key
 
         def parse_anonymous_header(x_user_anonymous: Optional[str] = Header(None)) -> bool:
-            """Parse the X-User-Anonymous header."""
+            """
+            Parse the X-User-Anonymous header.
+            
+            Frontend sends this to indicate if the Firebase user is anonymous.
+            Values: "true", "false", or not present (defaults to False).
+            """
             if x_user_anonymous is None:
                 return False
             return x_user_anonymous.lower() == "true"
@@ -305,10 +249,9 @@ class RAGServiceLite:
         async def health():
             return {
                 "status": "healthy",
-                "mode": "lite",
-                "pipeline_ready": True,  # Always ready in mock mode
+                "pipeline_ready": service.pipeline is not None,
                 "persistence": "dynamodb" if service.persistence else "none",
-                "queue_depth": 0,
+                "queue_depth": service.pipeline.generation_queue_depth if service.pipeline else 0,
             }
 
         @web_app.post("/v1/chat/completions")
@@ -319,98 +262,38 @@ class RAGServiceLite:
             x_user_anonymous: Optional[str] = Header(None),
         ):
             """
-            OpenAI-compatible chat completions endpoint (mock version).
-            
-            Uses the same streaming logic as the full backend - just yields
-            mock events instead of real pipeline events.
+            OpenAI-compatible chat completions endpoint.
+            DEBUG MODE: Logging enabled + Sources/Hallucination moved to 'delta' for visibility.
             """
+            import time as time_module
+            
+            if service.pipeline is None:
+                raise HTTPException(status_code=503, detail="Pipeline not initialized")
+            
             user_id = x_user_id or "anonymous"
             is_anonymous = parse_anonymous_header(x_user_anonymous)
             
-            # Extract query from messages
             user_messages = [m for m in request.messages if m.get("role") == "user"]
             if not user_messages:
                 raise HTTPException(status_code=400, detail="No user message provided")
             query = user_messages[-1].get("content", "")
-
-            # Generate IDs
+            
             completion_id = f"chatcmpl-{service._generate_id()}"
             message_id = service._generate_id()
-            created = int(time.time())
+            created = int(time_module.time())
             model = request.model or "litlens-rag"
             conversation_id = request.conversation_id or "default-session"
             
-            print(f"[MOCK] Query: user={user_id}, anon={is_anonymous}, conv={conversation_id}")
             print(f"--- START STREAM: {conversation_id} ---")
 
-            # Mock pipeline event generator (replaces service.pipeline.answer_stream)
-            async def mock_answer_stream(trace=None):
-                """Yields events in the same format as the real pipeline."""
-                start_time = time.perf_counter()
-                
-                # Simulate retrieval delay
-                await asyncio.sleep(0.1)
-                
-                # Add mock retrieval stages to trace
-                if trace:
-                    trace.add_stage("bm25", {"total": 50, "mock": True}, 45.0, papers_retrieved=50)
-                    trace.add_stage("embedding_paper", {"total": 50, "mock": True}, 120.0)
-                    trace.add_stage("hybrid_fusion", {"mock": True}, 2.0)
-                    trace.add_stage("embedding_chunk", {"total": 100, "mock": True}, 80.0, chunks_retrieved=100)
-                    trace.add_stage("reranker", {"mock": True}, 150.0, chunks_reranked=5)
-                
-                # 1. Context event (sources)
-                yield {
-                    "type": "context",
-                    "data": MOCK_SOURCES_FULL,
-                }
-                
-                # 2. Token events (stream the answer word by word)
-                mock_answer = generate_mock_answer(query, num_sentences=5)
-                words = mock_answer.split()
-                for i, word in enumerate(words):
-                    token = word + (" " if i < len(words) - 1 else "")
-                    yield {"type": "token", "content": token}
-                    await asyncio.sleep(random.uniform(0.02, 0.05))
-                
-                # Add generator stage to trace
-                if trace:
-                    trace.add_stage("generator", {"answer_length": len(mock_answer), "mock": True}, 500.0)
-                
-                # 3. Hallucination event (if enabled)
-                hal_result = None
-                print("Hallucination check enabled:", request.enable_hallucination_check)
-                if request.enable_hallucination_check:
-                    await asyncio.sleep(0.1)
-                    hal_result = {
-                        "type": "hallucination",
-                        "grounding_ratio": 0.29,
-                        "num_claims": 7,
-                        "num_grounded": 2,
-                        "unsupported_claims": [
-                            "The study used MSI to analyze the differential abundance of ions between treatment and control populations.",
-                            "The Histology Driven Data Mining study applied PLS-DA to analyze lipid differences.",
-                            "MSI data was processed to differentiate between preselected regions of interest.",
-                            "These examples show how multi-tissue MSI experiments can detect differentially abundant ions.",
-                            "Appropriate statistical methods and experimental design are important in MSI studies.",
-                        ],
-                    }
-                    yield hal_result
-                    
-                    if trace:
-                        trace.add_stage("hallucination", {"mock": True, "grounding_ratio": 0.29}, 200.0, grounding_ratio=0.29)
-                
-                # 4. Done event
-                total_duration = (time.perf_counter() - start_time) * 1000
-                yield {
-                    "type": "done",
-                    "message_id": message_id,
-                    "chat_id": conversation_id,
-                    "total_duration_ms": total_duration,
-                    # Pass back data needed for persistence
-                    "_answer": mock_answer,
-                    "_hallucination_result": hal_result,
-                }
+            kwargs = {
+                "query": query,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "is_anonymous": is_anonymous,
+                "enable_hallucination_check": request.enable_hallucination_check,
+                "message_id": message_id,
+            }
 
             if request.stream:
                 def format_sse(payload: dict) -> str:
@@ -444,38 +327,16 @@ class RAGServiceLite:
                     return format_sse({"type": "error", "error": message})
 
                 async def stream():
-                    trace = None
-                    accumulated_answer = ""
-                    sources_for_storage = []
-                    hallucination_result = None
-                    
                     try:
-                        # Create and save trace start if persistence available
-                        if service.persistence and service._TraceBuilder:
-                            trace = service._TraceBuilder(
-                                chat_id=conversation_id,
-                                user_id=user_id,
-                                query=query,
-                                is_anonymous=is_anonymous,
-                                message_id=message_id,
-                            )
-                            await service.persistence.save_trace_start(trace)
-                        
-                        # This mirrors the exact logic from the full backend
                         yield text_start()
-                        async for event in mock_answer_stream(trace=trace):
-                            if event.get("type") not in ["token"]:
-                                print(f"[DEBUG] Pipeline Event: {event.get('type')}")
-
+                        async for event in service.pipeline.answer_stream(**kwargs):
                             if event.get("type") == "token":
-                                content = event.get("content", "")
-                                accumulated_answer += content
-                                yield text_delta(content)
+                                yield text_delta(event.get("content", ""))
                             
                             elif event.get("type") == "context":
-                                sources_for_storage = event.get("data", [])
+                                sources = event.get("data", [])
                                 seen = set()
-                                for source in sources_for_storage:
+                                for source in sources:
                                     metadata = source.get("metadata", {})
                                     title = metadata.get("paper_title") or metadata.get("file_path")
                                     if not title or title in seen:
@@ -485,24 +346,18 @@ class RAGServiceLite:
                                     yield source_part(url, title)
                                 
                             elif event.get("type") == "hallucination":
-                                print("[DEBUG] Yielding Hallucination Chunk")
-                                hallucination_result = {
-                                    "grounding_ratio": event.get("grounding_ratio"),
-                                    "num_claims": event.get("num_claims"),
-                                    "num_grounded": event.get("num_grounded"),
-                                    "unsupported_claims": event.get("unsupported_claims"),
-                                }
                                 yield data_part(
                                     "verification",
-                                    hallucination_result,
+                                    {
+                                        "grounding_ratio": event.get("grounding_ratio"),
+                                        "num_claims": event.get("num_claims"),
+                                        "num_grounded": event.get("num_grounded"),
+                                        "unsupported_claims": event.get("unsupported_claims"),
+                                        "verifications": event.get("verifications"),
+                                    },
                                 )
                             
                             elif event.get("type") == "done":
-                                print("[DEBUG] Yielding Done Chunk")
-                                # Get final data from done event
-                                if "_hallucination_result" in event and event["_hallucination_result"]:
-                                    hallucination_result = event["_hallucination_result"]
-                                
                                 yield data_part(
                                     "completion",
                                     {
@@ -512,33 +367,11 @@ class RAGServiceLite:
                                     },
                                 )
                         
-                        # Save to DynamoDB if available
-                        if service.persistence and trace:
-                            trace.complete()
-                            await service.persistence.save_turn(
-                                trace=trace,
-                                answer=accumulated_answer,
-                                sources=sources_for_storage,
-                                hallucination_result=hallucination_result,
-                            )
-                            print(f"[MOCK] Saved to DynamoDB: message_id={message_id}")
-                        
-                        print("--- END STREAM ---")
                         yield text_end()
                         yield "data: [DONE]\n\n"
                     
                     except Exception as e:
                         print(f"ERROR in Stream: {e}")
-                        # Mark trace as failed and save
-                        if trace:
-                            trace.fail("streaming", str(e))
-                            if service.persistence:
-                                await service.persistence.save_turn(
-                                    trace=trace,
-                                    answer=accumulated_answer,
-                                    sources=sources_for_storage,
-                                    hallucination_result=None,
-                                )
                         yield error_part(str(e))
                         yield "data: [DONE]\n\n"
 
@@ -549,29 +382,18 @@ class RAGServiceLite:
                         "Cache-Control": "no-cache",
                         "Connection": "keep-alive",
                         "X-Accel-Buffering": "no",
-                        VERCEL_STREAM_HEADER: "v1",
+                        "x-vercel-ai-ui-message-stream": "v1",
                     },
                 )
             else:
                 # Non-streaming: collect all events
-                trace = None
                 answer = ""
                 sources = []
-                hallucination_result = None
+                result_message_id = None
+                chat_id = None
                 total_duration_ms = 0
                 
-                # Create trace if persistence available
-                if service.persistence and service._TraceBuilder:
-                    trace = service._TraceBuilder(
-                        chat_id=conversation_id,
-                        user_id=user_id,
-                        query=query,
-                        is_anonymous=is_anonymous,
-                        message_id=message_id,
-                    )
-                    await service.persistence.save_trace_start(trace)
-                
-                async for event in mock_answer_stream(trace=trace):
+                async for event in service.pipeline.answer_stream(**kwargs):
                     if event.get("type") == "token":
                         answer += event.get("content", "")
                     elif event.get("type") == "context":
@@ -582,20 +404,12 @@ class RAGServiceLite:
                             "num_claims": event.get("num_claims"),
                             "num_grounded": event.get("num_grounded"),
                             "unsupported_claims": event.get("unsupported_claims"),
+                            "verifications": event.get("verifications"),
                         }
                     elif event.get("type") == "done":
+                        result_message_id = event.get("message_id")
+                        chat_id = event.get("chat_id")
                         total_duration_ms = event.get("total_duration_ms", 0)
-                
-                # Save to DynamoDB if available
-                if service.persistence and trace:
-                    trace.complete()
-                    await service.persistence.save_turn(
-                        trace=trace,
-                        answer=answer,
-                        sources=sources,
-                        hallucination_result=hallucination_result,
-                    )
-                    print(f"[MOCK] Saved to DynamoDB: message_id={message_id}")
                 
                 return {
                     "id": completion_id,
@@ -613,38 +427,42 @@ class RAGServiceLite:
                     "usage": {
                         "total_duration_ms": total_duration_ms,
                     },
-                    "sources": sources,
-                    "hallucination": hallucination_result,
-                    "message_id": message_id,
-                    "chat_id": conversation_id,
+                    "sources": sources,  # Extension
+                    "hallucination": hallucination_result, # Will be None if not enabled
+                    "message_id": result_message_id,
+                    "chat_id": chat_id,
                 }
 
         # =================================================================
-        # Chat History Endpoints (unchanged from full backend)
+        # Chat History Endpoints
         # =================================================================
-        @web_app.get("/get_chats")
+
+        @web_app.get("/get_chat")
         async def list_chats(
             token: str = Depends(verify_token),
             x_user_id: Optional[str] = Header(None),
             x_user_anonymous: Optional[str] = Header(None),
             limit: int = 20,
         ):
-            """List user's recent chats (for sidebar)."""
+            """
+            List user's recent chats (for sidebar).
+            
+            Anonymous users get an empty list with a message to sign in.
+            This is because anonymous users don't have persistent identity
+            across sessions that would make chat history meaningful.
+            """
             if not service.persistence:
                 raise HTTPException(status_code=501, detail="Persistence not configured")
             
-            print(f"DEBUG: Received x_user_id header: {repr(x_user_id)}")
-            print(f"DEBUG: Received x_user_anonymous header: {repr(x_user_anonymous)}")
-            
             user_id = x_user_id or "anonymous"
-            print("User ID:", user_id)
-            # is_anonymous = parse_anonymous_header(x_user_anonymous)
+            is_anonymous = parse_anonymous_header(x_user_anonymous)
             
-            # if is_anonymous or user_id == "anonymous":
-            #     return {
-            #         "chats": [],
-            #         "message": "Sign in to view chat history",
-            #     }
+            # Anonymous users cannot list past chats
+            if is_anonymous or user_id == "anonymous":
+                return {
+                    "chats": [],
+                    "message": "Sign in to view chat history",
+                }
             
             chats = await service.persistence.get_user_chats(user_id=user_id, limit=limit)
             return {"chats": chats}
@@ -656,16 +474,22 @@ class RAGServiceLite:
             x_user_id: Optional[str] = Header(None),
             limit: int = 100,
         ):
-            """Get all messages for a chat."""
+            """
+            Get all messages for a chat (for loading conversation).
+            
+            Verifies that the requesting user owns this chat.
+            """
             if not service.persistence:
                 raise HTTPException(status_code=501, detail="Persistence not configured")
             
             user_id = x_user_id or "anonymous"
             
+            # Verify ownership
             is_owner, actual_owner = await service.persistence.verify_chat_ownership(
                 chat_id, user_id
             )
             
+            # If chat exists and user doesn't own it, deny access
             if actual_owner is not None and not is_owner:
                 raise HTTPException(status_code=403, detail="Access denied")
             
@@ -675,7 +499,7 @@ class RAGServiceLite:
             return {"chat_id": chat_id, "messages": messages}
 
         # =================================================================
-        # Trace Endpoint
+        # Trace Endpoint (with ownership verification)
         # =================================================================
 
         @web_app.get("/chats/{chat_id}/messages/{message_id}/trace")
@@ -686,13 +510,27 @@ class RAGServiceLite:
             x_user_id: Optional[str] = Header(None),
             x_user_anonymous: Optional[str] = Header(None),
         ):
-            """Get the trace for a specific message."""
+            """
+            Get the trace for a specific message.
+            
+            This is the primary way to inspect what happened during a query.
+            
+            Security:
+            - Verifies that the requesting user owns the chat
+            - Returns 403 if user doesn't own the chat
+            - Returns 404 if trace doesn't exist
+            
+            Args:
+                chat_id: The chat ID containing the message
+                message_id: The message ID (also the trace identifier)
+            """
             if not service.persistence:
                 raise HTTPException(status_code=501, detail="Persistence not configured")
             
             user_id = x_user_id or "anonymous"
             is_anonymous = parse_anonymous_header(x_user_anonymous)
             
+            # Use the auth-aware trace retrieval
             trace, error = await service.persistence.get_trace_with_auth(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -708,7 +546,7 @@ class RAGServiceLite:
             return trace
 
         # =================================================================
-        # Chat Title Generation (mock)
+        # Chat Title Generation
         # =================================================================
 
         @web_app.post("/chats/{chat_id}/generate-title")
@@ -719,19 +557,40 @@ class RAGServiceLite:
             x_user_id: Optional[str] = Header(None),
             x_user_anonymous: Optional[str] = Header(None),
         ):
-            """Generate a mock title for a chat."""
+            """
+            Generate a descriptive title for a chat.
+            
+            This endpoint uses the already-loaded LLM to generate a concise,
+            specific title based on the queries provided by the frontend.
+            
+            Workflow:
+            1. Frontend tracks message count
+            2. When count >= 2 and user is NOT anonymous, frontend calls this endpoint
+            3. Frontend provides the queries it already has in the request body
+            4. Backend generates title using LLM and updates metadata table
+            5. Returns the generated title
+            
+            Security:
+            - Requires non-anonymous user
+            - Verifies user owns the chat before updating
+            """
             if not service.persistence:
                 raise HTTPException(status_code=501, detail="Persistence not configured")
+            
+            if not service.pipeline:
+                raise HTTPException(status_code=503, detail="Pipeline not initialized")
             
             user_id = x_user_id or "anonymous"
             is_anonymous = parse_anonymous_header(x_user_anonymous)
             
+            # Anonymous users cannot rename chats
             if is_anonymous or user_id == "anonymous":
                 raise HTTPException(
                     status_code=403,
                     detail="Sign in to generate chat titles"
                 )
             
+            # Verify ownership
             is_owner, actual_owner = await service.persistence.verify_chat_ownership(
                 chat_id, user_id
             )
@@ -742,11 +601,19 @@ class RAGServiceLite:
             if not is_owner:
                 raise HTTPException(status_code=403, detail="Access denied")
             
+            # Validate queries
             if not request.queries:
                 raise HTTPException(status_code=400, detail="No queries provided")
             
-            # Generate mock title
-            title = generate_mock_title(request.queries[:3])
+            queries = request.queries[:3]  # Cap at 3
+            
+            # Generate title using the already-loaded LLM
+            try:
+                title = await service.pipeline.generate_chat_title(queries)
+            except Exception as e:
+                print(f"Title generation failed: {e}")
+                # Fallback to first query truncated
+                title = queries[0][:50] if queries else "New Chat"
             
             # Update the title in metadata table
             success = await service.persistence.update_chat_title(
@@ -765,7 +632,6 @@ class RAGServiceLite:
                 "chat_id": chat_id,
                 "title": title,
                 "generated": True,
-                "mock": True,
             }
 
         @web_app.patch("/chats/{chat_id}")
@@ -850,52 +716,7 @@ class RAGServiceLite:
             return {"chat_id": chat_id, "hidden": True}
 
         # =================================================================
-        # Feedback Endpoint
-        # =================================================================
-
-        @web_app.post("/feedback")
-        async def submit_feedback(
-            request: FeedbackRequest,
-            token: str = Depends(verify_token),
-            x_user_id: Optional[str] = Header(None),
-            x_user_anonymous: Optional[str] = Header(None),
-        ):
-            """Store feedback for a specific assistant message."""
-            if not service.persistence:
-                raise HTTPException(status_code=501, detail="Persistence not configured")
-
-            user_id = x_user_id or "anonymous"
-            is_anonymous = parse_anonymous_header(x_user_anonymous)
-
-            is_owner, actual_owner = await service.persistence.verify_chat_ownership(
-                request.chat_id, user_id
-            )
-            print("chat id:", request.chat_id)
-            print("user id:", user_id)
-            print("message id:", request.message_id)
-            if actual_owner is not None and not is_owner:
-                raise HTTPException(status_code=403, detail="Access denied")
-
-            rating = request.rating.strip().lower()
-            if rating not in {"positive", "negative"}:
-                raise HTTPException(status_code=400, detail="Invalid rating")
-
-            success = await service.persistence.update_message_feedback(
-                chat_id=request.chat_id,
-                message_id=request.message_id,
-                rating=rating,
-                comment=request.comment,
-                user_id=None if is_anonymous else user_id,
-                is_anonymous=is_anonymous,
-            )
-
-            if not success:
-                raise HTTPException(status_code=404, detail="Message not found")
-
-            return {"ok": True}
-
-        # =================================================================
-        # Admin/Debug Endpoints
+        # Admin/Debug Endpoints (optional, remove in production)
         # =================================================================
 
         @web_app.get("/admin/abandoned-traces")
@@ -903,7 +724,11 @@ class RAGServiceLite:
             token: str = Depends(verify_token),
             limit: int = 50,
         ):
-            """Get traces that were abandoned (status still 'running')."""
+            """
+            Get traces that were abandoned (status still "running").
+            
+            Useful for monitoring and debugging.
+            """
             if not service.persistence:
                 raise HTTPException(status_code=501, detail="Persistence not configured")
             
