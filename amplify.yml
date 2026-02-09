@@ -10,6 +10,7 @@ applications:
             - pnpm install --frozen-lockfile
         build:
           commands:
+            - env | grep -E '^(BACKEND_URL|SERVICE_TOKEN)=' >> .env.production || true
             - pnpm build
       artifacts:
         baseDirectory: .next
