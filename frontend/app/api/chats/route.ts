@@ -4,6 +4,7 @@ const SERVICE_TOKEN = process.env.SERVICE_TOKEN;
 export async function GET(req: Request) {
   const userId = req.headers.get("x-user-id");
   const userAnonymous = req.headers.get("x-user-anonymous");
+  console.log("BACKEND_URL", process.env.BACKEND_URL);
 
   const response = await fetch(`${BACKEND_URL}/get_chats?limit=50`, {
     method: "GET",
