@@ -26,4 +26,5 @@ jobs:
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: modal deploy backend/rag_backend.py
+        working-directory: backend
+        run: modal deploy rag_backend.py
