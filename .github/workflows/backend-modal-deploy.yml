@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Modal CLI
-        run: pip install "modal>=1.3.0"
+        run: pip install "modal>=1.3.0" "fastapi>=0.125.0"
 
       - name: Deploy Modal app
         env:
