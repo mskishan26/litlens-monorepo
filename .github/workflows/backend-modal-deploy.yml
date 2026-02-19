@@ -24,6 +24,6 @@ jobs:
 
       - name: Deploy Modal app
         env:
-          MODAL_TOKEN: ${{ secrets.MODAL_TOKEN }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: modal deploy backend/rag_backend.py
