@@ -1,0 +1,29 @@
+name: Deploy Modal Backend
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-modal-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Modal CLI
+        run: pip install "modal>=1.3.0"
+
+      - name: Deploy Modal app
+        env:
+          MODAL_TOKEN: ${{ secrets.MODAL_TOKEN }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy backend/rag_backend.py
